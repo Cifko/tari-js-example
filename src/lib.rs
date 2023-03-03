@@ -1,41 +1,40 @@
+use crate::transaction_builder::TransactionBuilder;
+use js_sys::Array;
+use js_sys::Math::floor;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::convert::TryInto;
-use js_sys::Array;
+use std::fmt::Write;
 use tari_crypto::keys::PublicKey;
 use tari_crypto::ristretto::{RistrettoPublicKey, RistrettoSchnorr, RistrettoSecretKey};
-use tari_crypto::tari_utilities::ByteArray;
 use tari_crypto::tari_utilities::hex::Hex;
+use tari_crypto::tari_utilities::ByteArray;
+use tari_dan_common_types::ShardId;
 use tari_engine_types::commit_result::TransactionResult;
 use tari_engine_types::hashing::hasher;
 use tari_engine_types::instruction;
 use tari_engine_types::instruction::Instruction;
 use tari_engine_types::substate::SubstateAddress;
+use tari_template_lib::args::Arg;
+use tari_template_lib::constants::PUBLIC_IDENTITY_RESOURCE;
+use tari_template_lib::crypto::RistrettoPublicKeyBytes;
+use tari_template_lib::models::ComponentAddress;
+use tari_template_lib::models::TemplateAddress;
+use tari_template_lib::prelude::NonFungibleAddress;
 use tari_template_lib::{arg, args};
 use tari_transaction::InstructionSignature;
-use tari_template_lib::models::TemplateAddress;
+use tari_transaction::Transaction;
+use tari_validator_node_client::types::SubmitTransactionRequest;
+use tari_validator_node_client::types::SubmitTransactionResponse;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
+use web_sys::WorkerGlobalScope;
 use web_sys::{console, Window};
 use web_sys::{Request, RequestInit, RequestMode, Response};
-use tari_template_lib::models::ComponentAddress;
-use tari_template_lib::args::Arg;
-use tari_template_lib::constants::PUBLIC_IDENTITY_RESOURCE;
-use web_sys::WorkerGlobalScope;
-use tari_validator_node_client::types::SubmitTransactionRequest;
-use crate::transaction_builder::TransactionBuilder;
-use tari_validator_node_client::types::SubmitTransactionResponse;
-use tari_transaction::Transaction;
-use tari_template_lib::prelude::NonFungibleAddress;
-use tari_template_lib::crypto::RistrettoPublicKeyBytes;
-use std::fmt::Write;
-use js_sys::Math::floor;
-use tari_dan_common_types::ShardId;
 
 mod transaction_builder;
-
 
 // When the `wee_alloc` feature is enabled, this uses `wee_alloc` as the global
 // allocator.
@@ -44,7 +43,6 @@ mod transaction_builder;
 #[cfg(feature = "wee_alloc")]
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
-
 
 // #[wasm_bindgen(module="/wasm-imports.js")]
 // extern "C" {
@@ -107,7 +105,6 @@ extern "C" {
     fn get_random_values(buf: &mut [u8]);
 }
 
-
 // This is like the `main` function, except for JavaScript.
 #[wasm_bindgen(start)]
 pub fn main_js() -> Result<(), JsValue> {
@@ -127,6 +124,8 @@ pub fn say_hello() -> Result<(), JsValue> {
     console::log_1(&JsValue::from_str("Hello 2"));
     Ok(())
 }
+
+// #[wasm_bindgen(js_name = "first")]
 
 #[derive(Serialize, Deserialize)]
 struct JsonRequest<T> {
@@ -184,7 +183,6 @@ async fn make_json_request<T: Serialize>(
         }
     }
 
-
     // `resp_value` is a `Response` object.
     assert!(resp_value.is_instance_of::<Response>());
     let resp: Response = resp_value.dyn_into().unwrap();
@@ -209,7 +207,6 @@ fn create_secret_nonce() -> RistrettoSecretKey {
     get_random_values(&mut bytes);
     RistrettoSecretKey::from_bytes(&bytes).unwrap()
 }
-
 
 #[wasm_bindgen]
 pub struct TariConnection {
@@ -243,7 +240,7 @@ impl TariConnection {
             "get_identity".to_string(),
             HashMap::<String, String>::new(),
         )
-            .await?;
+        .await?;
         let res: JsonRpcResponse<GetIdentityResponse> = serde_wasm_bindgen::from_value(v)?;
         // console::log_1(&JsValue::from_str(res.result.public_address.as_str() ));
         Ok(serde_wasm_bindgen::to_value(&res.result)?)
@@ -254,9 +251,11 @@ impl TariConnection {
         let v = make_json_request(
             self.url.clone(),
             "get_templates".to_string(),
-            GetTemplatesRequest { limit: limit.unwrap_or(20) },
+            GetTemplatesRequest {
+                limit: limit.unwrap_or(20),
+            },
         )
-            .await?;
+        .await?;
         console::log_1(&v);
         let res: JsonRpcResponse<GetTemplatesResponse> = serde_wasm_bindgen::from_value(v)?;
         // console::log_1(&JsValue::from_str(res.result.public_address.as_str() ));
@@ -268,9 +267,11 @@ impl TariConnection {
         let v = make_json_request(
             self.url.clone(),
             "get_template".to_string(),
-            GetTemplateRequest { template_address: address },
+            GetTemplateRequest {
+                template_address: address,
+            },
         )
-            .await?;
+        .await?;
         console::log_1(&v);
         let res: JsonRpcResponse<GetTemplateResponse> = serde_wasm_bindgen::from_value(v)?;
         // console::log_1(&JsValue::from_str(res.result.public_address.as_str() ));
@@ -278,9 +279,7 @@ impl TariConnection {
     }
 
     #[wasm_bindgen(js_name = "createAccount")]
-    pub async fn create_account(
-        &self
-    ) -> Result<JsValue, JsValue> {
+    pub async fn create_account(&self) -> Result<JsValue, JsValue> {
         let resource_address = PUBLIC_IDENTITY_RESOURCE;
         // TODO: I manually create the address, but you can use a NonFungibleAddress
         // instead
@@ -297,7 +296,6 @@ impl TariConnection {
             args: vec![Arg::Literal(vec)],
         };
 
-
         // let pub_nonce = RistrettoPublicKey::from_secret_key(&sec_nonce);
         // let signature = sign(, sec_nonce, &instructions);
 
@@ -311,7 +309,12 @@ impl TariConnection {
         builder.sign_with_nonce(&self.secret_key, sec_nonce);
         console::log_1(&JsValue::from_str("instruction signed"));
         let transaction = builder.build();
-        let expected_component = transaction.meta().involved_shards().first().unwrap().clone();
+        let expected_component = transaction
+            .meta()
+            .involved_shards()
+            .first()
+            .unwrap()
+            .clone();
         // let challenge = sign(secret_key, public_key, instructions);
         let req = SubmitTransactionRequest {
             transaction,
@@ -333,21 +336,28 @@ impl TariConnection {
                     match address {
                         SubstateAddress::Component(addr) => {
                             component_address = addr.clone();
-                            console::log_1(&JsValue::from_str(&format!("component address: {}", address)));
-                            return Ok(serde_wasm_bindgen::to_value(&to_hex(component_address.hash()))?);
+                            console::log_1(&JsValue::from_str(&format!(
+                                "component address: {}",
+                                address
+                            )));
+                            return Ok(serde_wasm_bindgen::to_value(&to_hex(
+                                component_address.hash(),
+                            ))?);
                         }
                         _ => {}
                     }
                 }
             }
             TransactionResult::Reject(reason) => {
-                return Err(JsValue::from_str(&format!("Transaction rejected:{}", reason)));
+                return Err(JsValue::from_str(&format!(
+                    "Transaction rejected:{}",
+                    reason
+                )));
             }
         }
 
         Err(JsValue::from_str("No component address found"))
     }
-
 
     #[wasm_bindgen(js_name = "submitFunctionCall")]
     pub async fn submit_function_call(
@@ -362,7 +372,10 @@ impl TariConnection {
             template_address: TemplateAddress::from_hex(&template_address).unwrap(),
             function: method.clone(),
             // args: args.iter().map(|js| Arg::Literal(Vec::<u8>::from_hex(&js.as_string().unwrap()).unwrap())).collect(),
-            args: args.iter().map(|js| Arg::Literal(js.as_string().unwrap().as_bytes().to_vec())).collect(),
+            args: args
+                .iter()
+                .map(|js| Arg::Literal(js.as_string().unwrap().as_bytes().to_vec()))
+                .collect(),
         };
         // TODO: lol better pls
 
@@ -410,7 +423,10 @@ impl TariConnection {
             // template_address: TemplateAddress::from_hex(&template_address).unwrap(),
             component_address: ComponentAddress::from_hex(&component_address).unwrap(),
             method: method.clone(),
-            args: args.iter().map(|a| Arg::Literal(Vec::from_hex(&a.as_string().unwrap()).unwrap())).collect(),
+            args: args
+                .iter()
+                .map(|a| Arg::Literal(Vec::from_hex(&a.as_string().unwrap()).unwrap()))
+                .collect(),
             // args: vec![],
         };
 
@@ -436,7 +452,13 @@ impl TariConnection {
     }
 
     #[wasm_bindgen(js_name = "callReadOnlyMethod")]
-    pub async fn call_read_only_method(&self, component_address: String, component_version: u32, method: String, args: Array) -> Result<JsValue, JsValue> {
+    pub async fn call_read_only_method(
+        &self,
+        component_address: String,
+        component_version: u32,
+        method: String,
+        args: Array,
+    ) -> Result<JsValue, JsValue> {
         let mut lit_args = vec![];
         for arg in args.iter() {
             if let Some(number) = arg.as_f64() {
@@ -448,7 +470,8 @@ impl TariConnection {
             lit_args.push(arg!(arg.as_string().unwrap()));
         }
 
-        let component_address =  ComponentAddress::from_hex(&component_address).expect("invalid component address");
+        let component_address =
+            ComponentAddress::from_hex(&component_address).expect("invalid component address");
         let instruction = Instruction::CallMethod {
             component_address: component_address.clone(),
             method: method.clone(),
@@ -456,9 +479,11 @@ impl TariConnection {
         };
 
         let mut builder = Transaction::builder();
-        builder.add_instruction(instruction)
-            .with_new_outputs(5);
-        builder.add_input(ShardId::from_address(&SubstateAddress::Component(component_address), component_version));
+        builder.add_instruction(instruction).with_new_outputs(5);
+        builder.add_input(ShardId::from_address(
+            &SubstateAddress::Component(component_address),
+            component_version,
+        ));
         builder.sign_with_nonce(&self.secret_key, create_secret_nonce());
         let transaction = builder.build();
 
@@ -479,13 +504,14 @@ impl TariConnection {
     }
 
     #[wasm_bindgen(js_name = "callMethodAndDepositBuckets")]
-    pub async fn call_method_and_deposit_buckets(&self,
-                                                 component_address: String,
-                                                 component_version: u32,
-                                                 account_address: String,
-                                                 account_version: u32,
-                                                 method: String,
-                                                 args: Array,
+    pub async fn call_method_and_deposit_buckets(
+        &self,
+        component_address: String,
+        component_version: u32,
+        account_address: String,
+        account_version: u32,
+        method: String,
+        args: Array,
     ) -> Result<JsValue, JsValue> {
         console::log_1(&JsValue::from_str("call_method_and_deposit_buckets"));
 
@@ -504,7 +530,8 @@ impl TariConnection {
             lit_args.push(arg!(arg.as_string().unwrap()));
         }
 
-        let component_address =  ComponentAddress::from_hex(&component_address).expect("invalid component address");
+        let component_address =
+            ComponentAddress::from_hex(&component_address).expect("invalid component address");
         let instruction = Instruction::CallMethod {
             // template_address: TemplateAddress::from_hex(&template_address).unwrap(),
             // template_address: Default::default(),
@@ -515,17 +542,30 @@ impl TariConnection {
 
         let component_account_address = ComponentAddress::from_hex(&account_address).unwrap();
         let mut builder = Transaction::builder();
-        builder.add_instruction(instruction)
-            .add_instruction(Instruction::PutLastInstructionOutputOnWorkspace { key: b"bucket".to_vec() })
+        builder
+            .add_instruction(instruction)
+            .add_instruction(Instruction::PutLastInstructionOutputOnWorkspace {
+                key: b"bucket".to_vec(),
+            })
             .add_instruction(Instruction::CallMethod {
                 // template_address: TemplateAddress::from_hex([0u8; 32].to_hex().as_str()).unwrap(),
                 component_address: component_account_address.clone(),
                 method: "deposit".to_string(),
                 args: vec![Arg::Variable(b"bucket".to_vec())],
-            }).with_new_outputs(5);
-        builder.add_input(ShardId::from_address(&SubstateAddress::Component(component_address), component_version));
-        builder.add_input(ShardId::from_address(&SubstateAddress::Component(component_account_address), account_version));
-        builder.add_output(ShardId::from_address(&SubstateAddress::Component(component_account_address), account_version + 1));
+            })
+            .with_new_outputs(5);
+        builder.add_input(ShardId::from_address(
+            &SubstateAddress::Component(component_address),
+            component_version,
+        ));
+        builder.add_input(ShardId::from_address(
+            &SubstateAddress::Component(component_account_address),
+            account_version,
+        ));
+        builder.add_output(ShardId::from_address(
+            &SubstateAddress::Component(component_account_address),
+            account_version + 1,
+        ));
         console::log_1(&JsValue::from_str("instruction created"));
         builder.sign_with_nonce(&self.secret_key, create_secret_nonce());
         console::log_1(&JsValue::from_str("instruction signed"));
@@ -581,7 +621,6 @@ struct GetTemplatesRequest {
 #[derive(Serialize, Deserialize, Debug)]
 struct GetTemplatesResponse {
     templates: Vec<TemplateMetadata>,
-
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -591,7 +630,6 @@ struct TemplateMetadata {
     binary_sha: Vec<u8>,
     height: u32,
 }
-
 
 #[derive(Serialize, Deserialize)]
 struct GetIdentityResponse {
